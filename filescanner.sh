@@ -458,8 +458,10 @@ BASHEOF
 # Embed the config
 cat "$CONFIG_FILE" >> "$OUTPUT_SH"
 
+# Close the CONFIG here-document
+echo "CONFIGEOF" >> "$OUTPUT_SH"
+
 cat >> "$OUTPUT_SH" << 'BASHEOF'
-CONFIGEOF
 
 # Helper functions
 build_actual_command() {
