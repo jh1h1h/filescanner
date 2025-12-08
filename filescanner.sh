@@ -9,7 +9,7 @@ VERBOSE=false
 # Help function
 show_help() {
     cat << EOF
-Usage: ./search.sh [OPTIONS]
+Usage: ./filescanner.sh [OPTIONS]
 
 Recursively search filesystem for sensitive files and keywords based on config file.
 
@@ -22,21 +22,23 @@ OPTIONS:
 
 EXAMPLES:
     # Search /var/www with default config (quiet mode)
-    ./search.sh -r /var/www
+    ./filescanner.sh -r /var/www
 
     # Verbose mode - shows commands and metadata
-    ./search.sh -r /var/www -v
+    ./filescanner.sh -r /var/www -v
 
     # Specify all parameters
-    ./search.sh -c my_config.txt -r /home/user -o results/scan.txt
+    ./filescanner.sh -c my_config.txt -r /home/user -o results/scan.txt
 
     # Show this help
-    ./search.sh --help
+    ./filescanner.sh --help
 
 CONFIG FILE FORMAT:
     [Section Name]
-    Command: command_with_KEYWORDS_EXTENSIONS_FILES_placeholders
-    Example: actual_command_example (auto-updated each run)
+    Linux Command: command_with_KEYWORDS_EXTENSIONS_FILES_placeholders
+    Linux Example: actual_command_example (auto-updated each run)
+    Windows Command: windows_command_here
+    Windows Example: windows_example_here
     Keywords: keyword1, keyword2, keyword3
     Extensions: *.ext1, *.ext2
     Files: file1, file2
@@ -51,7 +53,7 @@ OUTPUT:
     With -v: Commands, metadata, and results are saved
 
 NOTE:
-    The Example line in the config file is auto-updated each time the script runs
+    The Linux Example line in the config file is auto-updated each time the script runs
     to reflect the actual command that will be executed.
 
 EOF
@@ -82,7 +84,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Run './search.sh --help' for usage information"
+            echo "Run './filescanner.sh --help' for usage information"
             exit 1
             ;;
     esac
@@ -91,7 +93,7 @@ done
 # Check if search root is specified
 if [[ -z "$SEARCH_ROOT" ]]; then
     echo "Error: Search root directory must be specified with -r or --root"
-    echo "Run './search.sh --help' for usage information"
+    echo "Run './filescanner.sh --help' for usage information"
     exit 1
 fi
 
@@ -104,7 +106,7 @@ fi
 # Check if config file exists
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "Config file not found: $CONFIG_FILE"
-    echo "Run './search.sh --help' for usage information"
+    echo "Run './filescanner.sh --help' for usage information"
     exit 1
 fi
 
@@ -195,17 +197,18 @@ build_actual_command() {
 
 # Process config file
 current_section=""
-command=""
+linux_command=""
+windows_command=""
 keywords=""
 extensions=""
 files=""
 
 process_section() {
-    if [[ -z "$command" ]]; then
+    if [[ -z "$linux_command" ]]; then
         return
     fi
     
-    local actual_command=$(build_actual_command "$command" "$keywords" "$extensions" "$files")
+    local actual_command=$(build_actual_command "$linux_command" "$keywords" "$extensions" "$files")
     
     # Store the example for this section (remove extra backslashes)
     local clean_command=$(echo "$actual_command" | sed 's/\\\\/\\/g')
@@ -223,7 +226,8 @@ process_section() {
     fi
     
     # Reset for next section
-    command=""
+    linux_command=""
+    windows_command=""
     keywords=""
     extensions=""
     files=""
@@ -249,12 +253,32 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     # Skip comments and empty lines
     [[ "$line" =~ ^#.*$ ]] || [[ -z "$line" ]] && continue
     
-    # Parse metadata lines
-    if [[ "$line" =~ ^"Command: "(.+)$ ]]; then
-        command="${BASH_REMATCH[1]}"
+    # Parse metadata lines - prioritize Linux command
+    if [[ "$line" =~ ^"Linux Command: "(.+)$ ]]; then
+        linux_command="${BASH_REMATCH[1]}"
         if [[ "$VERBOSE" == true ]]; then
-            echo "Command template: $command" | tee -a "$OUTPUT_FILE"
+            echo "Linux Command template: $linux_command" | tee -a "$OUTPUT_FILE"
         fi
+    elif [[ "$line" =~ ^"Windows Command: "(.+)$ ]]; then
+        windows_command="${BASH_REMATCH[1]}"
+        if [[ "$VERBOSE" == true ]]; then
+            echo "Windows Command template: $windows_command" | tee -a "$OUTPUT_FILE"
+        fi
+    elif [[ "$line" =~ ^"Command: "(.+)$ ]]; then
+        # Backward compatibility - if no Linux/Windows split
+        if [[ -z "$linux_command" ]]; then
+            linux_command="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$VERBOSE" == true ]]; then
+            echo "Command template: $linux_command" | tee -a "$OUTPUT_FILE"
+        fi
+    elif [[ "$line" =~ ^"Linux Example: "(.+)$ ]]; then
+        if [[ "$VERBOSE" == true ]]; then
+            echo "Linux Example (will be updated): ${BASH_REMATCH[1]}" | tee -a "$OUTPUT_FILE"
+        fi
+    elif [[ "$line" =~ ^"Windows Example: "(.+)$ ]]; then
+        # Skip Windows example on Linux
+        continue
     elif [[ "$line" =~ ^"Example: "(.+)$ ]]; then
         if [[ "$VERBOSE" == true ]]; then
             echo "Example (will be updated): ${BASH_REMATCH[1]}" | tee -a "$OUTPUT_FILE"
@@ -281,7 +305,7 @@ done < "$CONFIG_FILE"
 # Process final section
 process_section
 
-# Update config file with new examples
+# Update config file with new examples (only Linux Example line)
 TEMP_CONFIG=$(mktemp)
 current_section=""
 
@@ -290,14 +314,22 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" =~ ^\[.*\]$ ]]; then
         current_section="${line:1:-1}"
         echo "$line" >> "$TEMP_CONFIG"
+    elif [[ "$line" =~ ^"Linux Example: " ]]; then
+        # Replace Linux example line with updated command
+        if [[ -n "${section_examples[$current_section]}" ]]; then
+            echo "Linux Example: ${section_examples[$current_section]}" >> "$TEMP_CONFIG"
+        else
+            echo "$line" >> "$TEMP_CONFIG"
+        fi
     elif [[ "$line" =~ ^"Example: " ]]; then
-        # Replace example line with updated command
+        # Backward compatibility - update old Example lines
         if [[ -n "${section_examples[$current_section]}" ]]; then
             echo "Example: ${section_examples[$current_section]}" >> "$TEMP_CONFIG"
         else
             echo "$line" >> "$TEMP_CONFIG"
         fi
     else
+        # Keep all other lines including Windows Example
         echo "$line" >> "$TEMP_CONFIG"
     fi
 done < "$CONFIG_FILE"
