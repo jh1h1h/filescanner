@@ -328,6 +328,18 @@ PS_FOOTER
 
 echo "✓ Generated: $OUTPUT_PS1"
 
+# Generate Base64 encoded PowerShell (for fileless execution)
+echo ""
+echo "Generating base64 encoded PowerShell (fileless execution)..."
+OUTPUT_PS1_B64="${SCRIPT_DIR}/filescanner_standalone_encoded.txt"
+base64 -w 0 "$OUTPUT_PS1" > "$OUTPUT_PS1_B64"
+echo "✓ Generated: $OUTPUT_PS1_B64"
+echo ""
+echo "  Fileless execution usage:"
+echo '    $c = Get-Content filescanner_standalone_encoded.txt'
+echo '    $d = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($c))'
+echo '    IEX $d'
+
 # Generate Bash standalone
 echo "Generating standalone Bash script..."
 
@@ -478,10 +490,16 @@ echo ""
 echo "Generated ${#SECTION_NAMES[@]} scan sections"
 echo ""
 echo "Standalone scripts created:"
-echo "  PowerShell: $OUTPUT_PS1"
-echo "  Bash:       $OUTPUT_SH"
+echo "  PowerShell (normal):  $OUTPUT_PS1"
+echo "  PowerShell (base64):  $OUTPUT_PS1_B64"
+echo "  Bash:                 $OUTPUT_SH"
 echo ""
 echo "Usage:"
-echo "  PowerShell: .\\filescanner_standalone.ps1 -SearchRoot C:\\path"
-echo "  Bash:       ./filescanner_standalone.sh -r /path"
+echo "  PowerShell (normal):  .\\filescanner_standalone.ps1 -SearchRoot C:\\path"
+echo "  PowerShell (base64):  \$c=Get-Content filescanner_standalone_encoded.txt; IEX([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(\$c)))"
+echo "  Bash:                 ./filescanner_standalone.sh -r /path"
+echo ""
+echo "Choose based on scenario:"
+echo "  - Normal version: Easy to debug, audit, modify"
+echo "  - Base64 version: Fileless, stealthy, harder to detect"
 echo ""
