@@ -8,6 +8,45 @@ CONFIG_FILE="${SCRIPT_DIR}/filescanner.config"
 OUTPUT_PS1="${SCRIPT_DIR}/filescanner_standalone.ps1"
 OUTPUT_SH="${SCRIPT_DIR}/filescanner_standalone.sh"
 
+# Parse command line arguments
+show_help() {
+    cat << EOF
+File Scanner Generator v2.0
+Generates standalone PowerShell and Bash scripts from config file
+
+USAGE:
+    ./filescanner.sh [options]
+
+OPTIONS:
+    -c, --config FILE   Specify config file (default: filescanner.config)
+    -h, --help          Show this help message
+
+EXAMPLES:
+    ./filescanner.sh
+    ./filescanner.sh -c custom.config
+    ./filescanner.sh --config /path/to/config.txt
+
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -c|--config)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 echo "=== File Scanner Generator v2.0 ==="
 echo "Reading config from: $CONFIG_FILE"
 echo ""
@@ -109,19 +148,25 @@ build_windows_command() {
     
     # Replace EXTENSIONS (Robust Array)
     if [[ -n "$ext" ]] && [[ "$cmd" == *"EXTENSIONS"* ]]; then
+        # Escape single quotes in extensions
         local clean_ext=$(echo "$ext" | sed "s/'/''/g")
-        local include_list=$(echo "$clean_ext" | sed "s/[[:space:]]*,[[:space:]]*/','/g")
-        cmd="${cmd//EXTENSIONS/-Include @('$include_list')}"
+        # Convert comma-separated list to PowerShell array format with quotes
+        local ps_array="'$(echo "$clean_ext" | sed "s/[[:space:]]*,[[:space:]]*/','/g")'"
+        # Replace EXTENSIONS with the full -Include parameter
+        cmd="${cmd//EXTENSIONS/-Include @($ps_array)}"
     fi
     
     # Replace FILES (Robust Array)
     if [[ -n "$fls" ]] && [[ "$cmd" == *"FILES"* ]]; then
+        # Escape single quotes in filenames
         local clean_fls=$(echo "$fls" | sed "s/'/''/g")
-        local include_list=$(echo "$clean_fls" | sed "s/[[:space:]]*,[[:space:]]*/','/g")
-        cmd="${cmd//FILES/-Include @('$include_list')}"
+        # Convert comma-separated list to PowerShell array format with quotes
+        local ps_array="'$(echo "$clean_fls" | sed "s/[[:space:]]*,[[:space:]]*/','/g")'"
+        # Replace FILES with the full -Include parameter
+        cmd="${cmd//FILES/-Include @($ps_array)}"
     fi
 
-    # SAFETY: If FILES or EXTENSIONS remain (because var was empty), remove them to prevent syntax errors
+    # SAFETY: If EXTENSIONS or FILES remain (because var was empty), remove them to prevent syntax errors
     cmd="${cmd//EXTENSIONS/}"
     cmd="${cmd//FILES/}"
     
